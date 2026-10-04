@@ -19,6 +19,49 @@ Pair-wise GSB 标注任务仓库（第 17 批 / 276）。
 ./mvnw -q verify
 ```
 
+## 组件说明
+
+实现位于 `src/main/java/com/example/gsb/delimited/`，无第三方运行时依赖。
+
+| 类 | 职责 |
+|----|------|
+| `DelimitedParser` / `DelimitedParser.Session` | 流式解析入口；`Session` 同时是 `Iterator<ParsedRow>` 与 `AutoCloseable`，逐字符读取、零预读，不把文件载入内存 |
+| `ParserConfig` | 分隔符、引号字符、转义模式、容错策略、表头、期望字段数等配置 |
+| `EscapeMode` | `DOUBLE_QUOTE`（双引号翻倍，RFC 4180 风格）/ `BACKSLASH`（反斜杠转义） |
+| `FieldCountPolicy` | 字段数不匹配时的策略：`STRICT`（仅记录）、`PAD`（补 `null`）、`TRUNCATE`（截断） |
+| `ErrorType` / `ParseError` / `ParseException` | 错误分类（`UNCLOSED_QUOTE`、`FIELD_COUNT_MISMATCH`、`ILLEGAL_ESCAPE`）、带 1 起始行号列号的可读错误、严格模式异常 |
+| `ParsedRow` / `Header` | 一条记录；按表头名取值，列不存在或该行无值时返回 `Optional.empty()` |
+| `ParseStats` | 总行数、成功记录数、错误记录数与各错误类型分布 |
+
+### 用法
+
+```java
+ParserConfig config = ParserConfig.builder()
+        .header(true)                                  // 首行为表头
+        .lenient(true)                                // 容错：收集错误而非抛异常
+        .fieldCountPolicy(FieldCountPolicy.PAD)       // 字段不足时补 null
+        .build();
+
+DelimitedParser parser = new DelimitedParser(config);
+try (DelimitedParser.Session session = parser.open(reader)) {
+    session.stream().forEach(row -> {
+        String name = row.get("name").orElse("<missing>");
+        row.getErrors().forEach(e -> System.out.println(e));
+    });
+    ParseStats stats = session.getStats();
+}
+```
+
+默认（非 lenient）为严格模式，遇到第一个错误即抛 `ParseException`，异常上携带行号、列号、错误类型与可读原因，例如：
+`line 2, column 1: UNCLOSED_QUOTE - quoted field starting here is never closed: ...`
+
+### 两种转义规则的区别
+
+- **双引号翻倍（`DOUBLE_QUOTE`，默认，RFC 4180 风格）**：字面引号只能在引号字段内写成两个连续引号。`"say ""hi"""` 解析为 `say "hi"`。反斜杠没有任何特殊含义，`a\nb` 就是四个普通字符。
+- **反斜杠转义（`BACKSLASH`）**：字面引号写作 `\"`，反斜杠自身写作 `\\`，另支持 `\n`、`\r`、`\t` 与被转义的分隔符（引号内外皆可）。此模式下 `""` 不是转义：第一个引号结束字段，第二个引号会报 `ILLEGAL_ESCAPE`。
+
+两种模式互斥；非法的反斜杠序列、引号末尾悬空反斜杠、未加引号字段中出现引号、闭合引号后紧跟非分隔符内容，均按 `ILLEGAL_ESCAPE` 报出行号列号。
+
 ## 任务提示词
 
 以下为本题完整的 User Prompt 原文，两次执行必须使用完全相同的文本。
